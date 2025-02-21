@@ -1,0 +1,27 @@
+<RCC>
+  <qresource prefix="icons">
+    <file alias="visible.png">icons/visible.png</file>
+    <file alias="visible_hover.png">icons/visible_hover.png</file>
+    <file alias="invisible.png">icons/invisible.png</file>
+    <file alias="invisible_hover.png">icons/invisible_hover.png</file>
+    <file alias="remove.png">icons/remove.png</file>
+    <file alias="remove_hover.png">icons/remove_hover.png</file>
+    <file alias="settings.png">icons/settings.png</file>
+    <file alias="settings_hover.png">icons/settings_hover.png</file>
+    <file alias="close.png">icons/close.png</file>
+    <file alias="minimize.png">icons/minimize.png</file>
+    <file alias="maximize.png">icons/maximize.png</file>
+    <file alias="unmaximize.png">icons/unmaximize.png</file>
+    <file alias="appicon.png">icons/candlestick-chart.png</file>
+    <file alias="dollar.png">icons/dollar.png</file>
+    <file alias="chart.png">icons/chart.png</file>
+    <file alias="paper.png">icons/paper.png</file>
+    <file alias="portfolio.png">icons/portfolio.png</file>
+  </qresource>
+  <qresource prefix="images">
+    <file alias="splash_screen">images/splash_screen.jpg</file>
+  </qresource>
+  <qresource prefix="obit">
+      <file>Obit.qss</file>
+  </qresource>
+</RCC>
