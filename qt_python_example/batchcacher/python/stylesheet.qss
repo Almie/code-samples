@@ -1,0 +1,44 @@
+QMainWindow, QDialog{
+  background: #141B27;
+  color: #fff;
+}
+
+QMainWindow::separator{
+  background: #4A5569;
+  width:10px;
+  height:10px;
+}
+
+QDockWidget{
+  color:#7E8DA7;
+}
+QDockWidget::title{
+  background: #141B27;
+  text-align:center;
+}
+QDockWidget::title:hover{
+  background: #1D222A;
+}
+
+QTreeWidget{
+  background: #1F252F;
+  border:1x solid #4A5569;
+  color:#fff;
+}
+
+QTabBar::tab{
+  background:#1D222A;
+  color:#7E8DA7;
+}
+
+QPushButton{
+  background:#404F69;
+  color:#fff;
+}
+QPushButton:hover{
+  background:#295CB3;
+}
+
+QLabel{
+  color:#fff;
+}
