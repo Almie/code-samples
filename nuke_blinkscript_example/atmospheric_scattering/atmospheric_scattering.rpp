@@ -1,0 +1,251 @@
+/// AtmosphericScattering
+kernel AtmosphericScattering : ImageComputationKernel<ePixelWise> {
+  // Input and output images
+  Image<eRead, eAccessPoint, eEdgeClamped> colsrc;
+  Image<eRead, eAccessPoint, eEdgeClamped> depthsrc;
+  Image<eRead, eAccessPoint, eEdgeClamped> worldpossrc;
+  Image<eWrite, eAccessPoint> dst;
+
+param:
+  float3 cam_pos;
+  float cam_fov;
+  //float3 sun_dir;
+  float2 sun_screen_pos;
+  float sun_intensity;
+  float3 planet_pos;
+  float planet_radius;
+  float atmo_radius;
+  float3 beta_ray;
+  float3 beta_mie;
+  float3 beta_absorption;
+  float3 beta_ambient;
+  float g;
+  float height_ray;
+  float height_mie;
+  float height_absorption;
+  float absorption_falloff;
+  int primary_steps;
+  int light_steps;
+  float rayleigh_mult;
+  float mie_mult;
+  float ambient_mult;
+  float absorption_mult;
+  float sky_mult;
+
+local:
+  float3 start_pos;
+  float pi;
+  float tan_fov;
+  float aspectRatio;
+  float3 sun_dir_n;
+
+
+  void define() {
+    defineParam(cam_pos, "Camera Position", float3(0.0f, 0.0f, 0.0f));
+    defineParam(cam_fov, "Camera FOV", 23.0f);
+    //defineParam(sun_dir, "Sun Direction Vector", float3(0.0f, 0.0f, 1.0f));
+    defineParam(sun_screen_pos, "Sun Screen Pos", float2(0.0f, 0.0f));
+    defineParam(sun_intensity, "Sun Intensity", 40.0f);
+    defineParam(primary_steps, "Primary Samples", 32);
+    defineParam(light_steps, "Light Samples", 8);
+    defineParam(planet_pos, "Planet Pos", float3(0.0f, -6351e3f, 0.0f));
+    defineParam(planet_radius, "Planet Radius", 6371e3f);
+    defineParam(atmo_radius, "Atmosphere Radius", 6471e3f);
+    defineParam(beta_ray, "Beta Rayleigh", float3(5.5e-6, 13.0e-6, 22.4e-6));
+    defineParam(beta_mie, "Beta Mie", float3(21e-6));
+    defineParam(beta_absorption, "Beta Absorption", float3(2.04e-5, 4.97e-5, 1.95e-6));
+    defineParam(beta_ambient, "Beta Ambient", float3(1e-9, 2e-9, 3e-9));
+    defineParam(g, "Mie Scattering Direction", 0.7f);
+    defineParam(height_ray, "Rayleight Height", 10e3f);
+    defineParam(height_mie, "Mie Height", 1.2e3f);
+    defineParam(height_absorption, "Absorption Height", 35e3f);
+    defineParam(absorption_falloff, "Absorption Falloff", 4e3f);
+    defineParam(rayleigh_mult, "Rayleigh Mult", 1.0f);
+    defineParam(mie_mult, "Mie Mult", 1.0f);
+    defineParam(ambient_mult, "Ambient Mult", 1.0f);
+    defineParam(absorption_mult, "Absorption Mult", 1.0f);
+    defineParam(sky_mult, "Sky Mult", 1.0f);
+  }
+
+  void init() {
+    start_pos = cam_pos - planet_pos;
+    pi = 3.14159265359f;
+    float2 sun_uv(
+        (float(sun_screen_pos.x)-float(colsrc.bounds.x1))/(colsrc.bounds.x2-colsrc.bounds.x1) * 2 - 1,
+        (float(sun_screen_pos.y)-float(colsrc.bounds.y1))/(colsrc.bounds.y2-colsrc.bounds.y1) * 2 - 1
+    );
+    aspectRatio = float(colsrc.bounds.x2-colsrc.bounds.x1)/float(colsrc.bounds.y2-colsrc.bounds.y1);
+    sun_uv.x *= aspectRatio;
+    tan_fov = tan((cam_fov*pi/180)/2);
+    sun_dir_n = normalize(float3(sun_uv.x * tan_fov, sun_uv.y * tan_fov, -1.0f));
+    //sun_dir_n = normalize(sun_dir);
+  }
+
+  float2 ray_sphere_intersect(float3 origin, float3 direction, float3 sphere_center, float sphere_radius){
+    float3 L = sphere_center - origin;
+    float l = length(L);
+    float tc = dot(L, direction); //distance from origin to c, c being the center between the intersecting points on the sphere
+
+    float d_squared = l*l - tc * tc; //distance from sphere center to c, squared to avoid sqrt for optimization
+    float sphere_radius_squared = sphere_radius*sphere_radius;
+    if (d_squared > sphere_radius_squared) return float2(0.0f); //does not intersect
+
+    float t1c = sqrt(sphere_radius_squared - d_squared); //distance from first intersection point to c
+
+    float t1 = tc - t1c; //distance to first intersection
+    float t2 = tc + t1c; //distance to second intersection
+
+    return float2(t1,t2);
+
+  }
+
+  void scatter(float3 start_pos, float3 cam_dir, float2 ray_length, bool allow_mie, float3 scatterOutputs[]){
+    float step_size_primary = (ray_length.y - ray_length.x) / float(primary_steps);
+    float primary_ray_pos = ray_length.x + step_size_primary * 0.5f;
+    float3 total_rayleigh(0.0f);
+    float3 total_mie(0.0f);
+    float3 optical_depth(0.0f);
+
+    float mu = dot(cam_dir, sun_dir_n);
+    float mumu = mu * mu;
+    float gg = g * g;
+    float phase_ray = 3.0f / (16.0f * pi) * (1.0f + mumu);
+    float phase_mie = 0.0f;
+    if (allow_mie){
+        phase_mie = 3.0f / (8.0f * pi) * ((1.0f - gg) * (1.0f + mumu)) / (pow(1.0f + gg - 2.0f * mu * g, 1.5) * (2.0 + gg));
+    }
+
+    // sample primary ray
+    for (int i = 0; i < primary_steps; ++i){
+        float3 ray_pos = start_pos + cam_dir * primary_ray_pos;
+        float ray_height = length(ray_pos) - planet_radius;
+
+        float3 density(exp(-ray_height/height_ray), exp(-ray_height/height_mie), 0.0f);
+        float denom = (height_absorption - ray_height) / absorption_falloff;
+        density.z = (1.0f / (denom * denom + 1.0f)) * density.x;
+
+        density *= step_size_primary;
+
+        optical_depth += density;
+
+        float2 sun_ray_length = ray_sphere_intersect(ray_pos, sun_dir_n, float3(0.0f), atmo_radius);
+        float step_size_sun = sun_ray_length.y / float(light_steps);
+
+        float sun_ray_pos = step_size_sun * 0.5;
+        float3 optical_depth_sun(0.0f);
+
+        // sample sun ray
+        for (int l = 0;l < light_steps; ++l){
+            float3 ray_pos_l = ray_pos + sun_dir_n * sun_ray_pos;
+            float sun_ray_height = length(ray_pos_l) - planet_radius;
+
+            float3 sun_density(exp(-sun_ray_height / height_ray), exp(-sun_ray_height / height_mie), 0.0f);
+            float sun_denom = (height_absorption - sun_ray_height) / absorption_falloff;
+            sun_density.z = (1.0f / (sun_denom*sun_denom + 1.0f)) * sun_density.x;
+            sun_density *= step_size_sun;
+            optical_depth_sun += sun_density;
+            sun_ray_pos += step_size_sun;
+        }
+        
+        float3 attenuation = exp(-beta_ray * (optical_depth.x + optical_depth_sun.x) - beta_mie * (optical_depth.y + optical_depth_sun.y) - beta_absorption * (optical_depth.z + optical_depth_sun.z));
+
+        total_rayleigh += density.x * attenuation;
+        total_mie += density.y * attenuation;
+
+        primary_ray_pos += step_size_primary;
+
+    }
+
+    float3 opacity = exp(-(beta_ray * optical_depth.x + beta_mie * optical_depth.y + beta_absorption * optical_depth.z));
+    opacity = float3(1.0f) - ((float3(1.0f) - opacity)*absorption_mult);
+    
+    float3 rayleigh_col = phase_ray * beta_ray * total_rayleigh;
+    float3 mie_col = phase_mie * beta_mie * total_mie;
+    float3 ambient_col = optical_depth.x * beta_ambient;
+    scatterOutputs[0] = rayleigh_col;
+    scatterOutputs[1] = mie_col;
+    scatterOutputs[2] = ambient_col;
+    scatterOutputs[3] = opacity;
+  }
+
+  void process(int2 pos) {
+    float2 uv(
+        (float(pos.x)-float(colsrc.bounds.x1))/(colsrc.bounds.x2-colsrc.bounds.x1) * 2 - 1,
+        (float(pos.y)-float(colsrc.bounds.y1))/(colsrc.bounds.y2-colsrc.bounds.y1) * 2 - 1
+    );
+    uv.x *= aspectRatio;
+    float2 bounds((colsrc.bounds.x2-colsrc.bounds.x1), (colsrc.bounds.y2-colsrc.bounds.y1));
+
+    SampleType(colsrc) colSampler = colsrc();
+    float3 col(colSampler.x, colSampler.y, colSampler.z);
+    float alpha = colSampler.w;
+    SampleType(depthsrc) depthSampler = depthsrc();
+    float z = depthSampler.x;
+    SampleType(worldpossrc) posSampler = worldpossrc();
+    float3 world_pos(posSampler.x, posSampler.y, posSampler.z);
+
+    bool render_sky = (alpha < 1.0f);
+    bool render_fog = (alpha > 0.0f);
+
+    float3 cam_dir = normalize(float3(uv.x * tan_fov, uv.y * tan_fov, -1.0f));
+
+    float2 ray_length = ray_sphere_intersect(start_pos, cam_dir, float3(0.0f), atmo_radius);
+
+    if (ray_length.x == 0.0f && ray_length.y == 0.0f){
+        // ray did not hit atmosphere
+        dst() = float4(col.x, col.y, col.z, alpha);
+        return;
+    }
+    if (ray_length.x > ray_length.y){
+        // ray did not hit atmosphere
+        dst() = float4(col.x, col.y, col.z, alpha);
+        return;
+    }
+    
+    if (render_fog) col = col / alpha; //unpremult
+
+    //calculate sky
+    float3 sky(0.0f);
+    if (render_sky){
+        //add sun
+        float sundot = clamp(dot(cam_dir,sun_dir_n),0.0,1.0);
+        float3 sun = float3(1.6,1.4,1.0)*pow(sundot, 30000.0)*sun_intensity;
+        sky += sun*(1-alpha);
+
+        ray_length = float2(
+            max(ray_length.x, 0.0f),
+            ray_length.y
+        );
+
+        float3 scatterOutputs_sky[4];
+        scatter(start_pos, cam_dir, ray_length, true, scatterOutputs_sky);
+        float3 rayleigh_col_sky = scatterOutputs_sky[0];
+        float3 mie_col_sky = scatterOutputs_sky[1];
+        float3 ambient_col_sky = scatterOutputs_sky[2];
+        float3 opacity_sky = scatterOutputs_sky[3];
+
+        sky = sky * opacity_sky + (rayleigh_col_sky*rayleigh_mult + mie_col_sky*mie_mult + ambient_col_sky*ambient_mult) * sun_intensity;
+    }
+    //calculate fog occluding scene
+    if (render_fog){
+        ray_length = float2(
+            max(ray_length.x, 0.0f),
+            min(ray_length.y, z) //clamp ray length to z depth
+        );
+        bool allow_mie = true;
+    
+        float3 scatterOutputs[4];
+        scatter(start_pos, cam_dir, ray_length, allow_mie, scatterOutputs);
+        float3 rayleigh_col = scatterOutputs[0];
+        float3 mie_col = scatterOutputs[1];
+        float3 ambient_col = scatterOutputs[2];
+        float3 opacity = scatterOutputs[3];
+
+        col = col * opacity + (rayleigh_col*rayleigh_mult + mie_col*mie_mult + ambient_col*ambient_mult) * sun_intensity;
+    }
+    col = col * alpha; //premult
+    col = col + sky * (1.0f - alpha) * (sky_mult); //add sky
+
+    dst() = float4(col.x, col.y, col.z, alpha);
+  }
+};

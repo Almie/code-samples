@@ -4,7 +4,6 @@ from PySide2.QtWidgets import *
 import os, subprocess, json
 from . import dmxfile
 
-ROOT_DIRECTORY = "F:\\Dropbox\\CG\\apex_treasurevid\\rnd\\example_shot_structure"
 BLENDER_PATH = "C:\\Program Files (x86)\\Steam\\steamapps\\common\\Blender\\blender.exe"
 
 class StatusBarDelegate(QStyledItemDelegate):
